@@ -7,7 +7,9 @@ let retryingAuth = false;
 export function connectSocket() {
   if (socket) return socket;
   // The session cookie rides along on the websocket handshake, so no token is sent by hand.
-  socket = io('/', { transports: ['websocket'] });
+  // Default transports: long-polling first, then an upgrade to websocket. Vercel's
+  // rewrites carry the polling requests to Render, while websockets cannot pass through them.
+  socket = io('/');
   socket.on('connect', () => { retryingAuth = false; });
   // The access cookie expires after 15 minutes. If the handshake is rejected, refresh once and reconnect.
   socket.on('connect_error', async (err) => {
