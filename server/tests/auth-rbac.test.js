@@ -118,6 +118,11 @@ test('patients cannot use password login or staff APIs', async () => {
 
 test('OTP is single use and wrong codes are counted', async () => {
   const phone = '+919800000003';
+  // Codes go only to registered patients, so the record exists first.
+  await ctx.models.Patient.create({
+    clinicId: A.clinic._id, name: 'OTP Patient', phone,
+    consent: { dataProcessing: { granted: true, grantedAt: new Date(), version: 'v1' } },
+  });
   await ctx.api('POST', '/auth/patient/request-otp', { body: { clinicSlug: 'alpha', phone } });
   const wrong = await ctx.api('POST', '/auth/patient/verify-otp', { body: { clinicSlug: 'alpha', phone, code: '000000' } });
   assert.equal(wrong.status, 400);

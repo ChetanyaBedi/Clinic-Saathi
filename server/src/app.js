@@ -9,6 +9,19 @@ import rateLimit from 'express-rate-limit';
 import { env } from './config/env.js';
 import routes from './routes.js';
 import { notFoundHandler, errorHandler } from './middleware/error.js';
+import { verifyAccess } from './utils/tokens.js';
+import { ROLES } from './config/constants.js';
+
+/**
+ * Super admin panel calls skip the global API limit. The role comes from a
+ * signed access token, so a client cannot claim the exemption without one.
+ */
+function isSuperAdminRequest(req) {
+  const header = req.headers.authorization || '';
+  if (!header.startsWith('Bearer ')) return false;
+  try { return verifyAccess(header.slice(7)).role === ROLES.SUPER_ADMIN; }
+  catch { return false; }
+}
 
 export function createApp() {
   const app = express();
@@ -31,7 +44,12 @@ export function createApp() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 * env.rateLimitMultiplier, standardHeaders: true }));
+  app.use('/api', rateLimit({
+    windowMs: 60 * 1000,
+    max: 300 * env.rateLimitMultiplier,
+    standardHeaders: true,
+    skip: isSuperAdminRequest,
+  }));
 
   app.get('/health', (_req, res) => res.json({ ok: true, uptime: process.uptime() }));
   app.use('/api', routes);

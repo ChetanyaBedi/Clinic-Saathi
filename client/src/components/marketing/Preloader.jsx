@@ -26,7 +26,7 @@ export function Preloader() {
     }
 
     const tl = gsap.timeline({
-      delay: 0.25,
+      delay: 0.05,
       onComplete: () => {
         document.body.style.overflow = '';
         setShow(false);
@@ -38,7 +38,7 @@ export function Preloader() {
       {
         scale: 1.5,
         opacity: 0,
-        duration: 0.45,
+        duration: 0.25,
         ease: 'power2.in',
       },
       0
@@ -49,7 +49,7 @@ export function Preloader() {
       {
         scale: 1.1,
         opacity: 0,
-        duration: 0.35,
+        duration: 0.2,
         ease: 'power2.in',
       },
       0
@@ -59,10 +59,10 @@ export function Preloader() {
       panelRef.current,
       {
         yPercent: -100,
-        duration: 0.65,
+        duration: 0.45,
         ease: 'power4.inOut',
       },
-      0.08
+      0.04
     );
   };
 
@@ -76,15 +76,15 @@ export function Preloader() {
 
     const ctx = gsap.context(() => {
       const tl = gsap.timeline({
-        delay: 0.15,
+        delay: 0,
         onComplete: exit,
       });
 
       // Initial states
       gsap.set(doctorImageRef.current, {
         opacity: 0,
-        scale: 0.7,
-        rotation: -15,
+        scale: 0.8,
+        rotation: 0,
       });
 
       gsap.set(pulseRef.current, {
@@ -101,70 +101,51 @@ export function Preloader() {
       gsap.fromTo(
         glowRef.current,
         {
-          scale: 0.65,
+          scale: 0.8,
           opacity: 0,
         },
         {
           scale: 1,
           opacity: 1,
-          duration: 1.2,
-          ease: 'power3.out',
+          duration: 0.5,
+          ease: 'power2.out',
         }
       );
 
-      // Doctor image entrance with rotation
+      // Doctor image entrance
       tl.to(doctorImageRef.current, {
         opacity: 1,
         scale: 1,
-        rotation: 0,
-        duration: 0.8,
-        ease: 'back.out(1.5)',
+        duration: 0.35,
+        ease: 'back.out(1.4)',
       });
 
-      // Pulse animation
+      // One short pulse
       tl.to(
         pulseRef.current,
         {
           scale: 1.3,
           opacity: 0,
-          duration: 0.8,
-          ease: 'power1.inOut',
-          repeat: 2,
-          repeatDelay: 0.4,
+          duration: 0.4,
+          ease: 'power1.out',
         },
         0.1
       );
 
-      // Progress bar
+      // Progress bar fills while the app loads
       tl.to(
         progressRef.current,
         {
           scaleX: 1,
-          duration: 1.2,
+          duration: 0.6,
           ease: 'power2.inOut',
         },
-        '-=0.35'
+        '-=0.15'
       );
-
-      // Gentle floating animation
-      tl.to(
-        doctorImageRef.current,
-        {
-          y: -8,
-          duration: 0.4,
-          ease: 'sine.inOut',
-        },
-        '-=0.3'
-      );
-
-      tl.to(doctorImageRef.current, {
-        y: 0,
-        duration: 0.4,
-        ease: 'sine.inOut',
-      });
     }, panelRef);
 
-    const timeout = setTimeout(exit, 4500);
+    // Never hold the screen longer than this, even if the animation stalls.
+    const timeout = setTimeout(exit, 1800);
 
     return () => {
       ctx.revert();

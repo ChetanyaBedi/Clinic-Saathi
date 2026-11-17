@@ -2,7 +2,7 @@ import { z } from 'zod';
 import jwt from 'jsonwebtoken';
 import { User, Clinic, Subscription, Patient, Doctor } from '../../models/index.js';
 import {
-  signAccessToken, signRefreshToken, verifyRefresh, sha256, safeEqualHex, randomToken,
+  signAccessToken, signRefreshToken, verifyAccess, verifyRefresh, sha256, safeEqualHex, randomToken,
 } from '../../utils/tokens.js';
 import { catchAsync } from '../../utils/catchAsync.js';
 import { ApiError } from '../../utils/ApiError.js';
@@ -11,9 +11,10 @@ import { ROLES } from '../../config/constants.js';
 import { env } from '../../config/env.js';
 import { recordAudit } from '../../middleware/audit.js';
 import { getEntitlements } from '../../services/plans.service.js';
-import { issueOtp, verifyOtp, normalisePhone } from '../../services/otp.service.js';
+import { issueOtp, verifyOtp, normalisePhone, phoneVariants } from '../../services/otp.service.js';
 import { sendEmail } from '../../integrations/email.js';
 import { cloudinaryEnabled, uploadAvatarImage, deleteAvatarImage } from '../../integrations/cloudinary.js';
+import { setSessionCookies, clearSessionCookies, ACCESS_COOKIE, REFRESH_COOKIE } from '../../utils/cookies.js';
 
 const password = z.string().min(8, 'Use at least 8 characters').max(128)
   .regex(/[A-Za-z]/, 'Include at least one letter').regex(/\d/, 'Include at least one number');
@@ -40,12 +41,18 @@ export const patientRegisterSchema = z.object({
 const LOCK_AFTER = 8;
 const LOCK_MINUTES = 15;
 
-/** Issue a token pair and pin the refresh token's hash to the user. */
-async function issueSession(user) {
+/**
+ * Issue a token pair, pin the refresh token's hash to the user, and set both
+ * tokens as httpOnly cookies. The tokens are also returned in the body for
+ * non-browser API clients; the web app ignores them.
+ */
+async function issueSession(res, user) {
   const accessToken = signAccessToken(user);
   const refreshToken = signRefreshToken(user);
   await User.updateOne({ _id: user._id }, { refreshTokenHash: sha256(refreshToken), lastLoginAt: new Date() });
-  return { accessToken, refreshToken };
+  const tokens = { accessToken, refreshToken };
+  setSessionCookies(res, tokens);
+  return tokens;
 }
 
 export const login = catchAsync(async (req, res) => {
@@ -90,7 +97,7 @@ export const login = catchAsync(async (req, res) => {
   req.user = user;
   recordAudit(req, { action: 'USER_LOGIN', entityType: 'User', entityId: user._id });
 
-  const tokens = await issueSession(user);
+  const tokens = await issueSession(res, user);
   ok(res, { user: user.toSafeJSON(), ...tokens });
 });
 
@@ -100,24 +107,50 @@ export const login = catchAsync(async (req, res) => {
  * revoked outright.
  */
 export const refresh = catchAsync(async (req, res) => {
-  const { refreshToken } = req.body || {};
+  const refreshToken = req.cookies?.[REFRESH_COOKIE] || req.body?.refreshToken;
   if (!refreshToken) throw ApiError.unauthorized('No refresh token');
   let payload;
   try { payload = verifyRefresh(refreshToken); }
-  catch { throw ApiError.unauthorized('Session expired. Sign in again.', 'REFRESH_EXPIRED'); }
+  catch {
+    clearSessionCookies(res);
+    throw ApiError.unauthorized('Session expired. Sign in again.', 'REFRESH_EXPIRED');
+  }
 
   const user = await User.findById(payload.sub).select('+refreshTokenHash');
-  if (!user || !user.isActive) throw ApiError.unauthorized();
+  if (!user || !user.isActive) { clearSessionCookies(res); throw ApiError.unauthorized(); }
   if (!safeEqualHex(user.refreshTokenHash, sha256(refreshToken))) {
     await User.updateOne({ _id: user._id }, { $unset: { refreshTokenHash: 1 } });
+    clearSessionCookies(res);
     throw ApiError.unauthorized('Session expired. Sign in again.', 'REFRESH_REUSED');
   }
-  ok(res, await issueSession(user));
+  ok(res, await issueSession(res, user));
 });
 
+/**
+ * The session is found from whichever token is still valid: the access token
+ * (cookie or Bearer header), or else the refresh token. So signing out works
+ * even after the access cookie has expired.
+ */
+function sessionUserId(req) {
+  const header = req.headers.authorization || '';
+  const access = header.startsWith('Bearer ') ? header.slice(7) : req.cookies?.[ACCESS_COOKIE];
+  const refresh = req.cookies?.[REFRESH_COOKIE] || req.body?.refreshToken;
+  for (const [verify, token] of [[verifyAccess, access], [verifyRefresh, refresh]]) {
+    if (!token) continue;
+    try { return verify(token).sub; } catch { /* expired or invalid: try the next token */ }
+  }
+  return null;
+}
+
 export const logout = catchAsync(async (req, res) => {
-  await User.updateOne({ _id: req.user._id }, { $unset: { refreshTokenHash: 1 } });
-  recordAudit(req, { action: 'USER_LOGOUT', entityType: 'User', entityId: req.user._id });
+  const id = sessionUserId(req);
+  const user = id ? await User.findById(id) : null;
+  if (user) {
+    await User.updateOne({ _id: user._id }, { $unset: { refreshTokenHash: 1 } });
+    req.user = user; req.tenant = { clinicId: user.clinicId };
+    recordAudit(req, { action: 'USER_LOGOUT', entityType: 'User', entityId: user._id });
+  }
+  clearSessionCookies(res);
   ok(res, { loggedOut: true });
 });
 
@@ -166,7 +199,7 @@ export const changePassword = catchAsync(async (req, res) => {
   await user.setPassword(req.body.newPassword);
   await user.save();
   recordAudit(req, { action: 'PASSWORD_CHANGED', entityType: 'User', entityId: user._id });
-  ok(res, await issueSession(user));
+  ok(res, await issueSession(res, user));
 });
 
 // ------------------------------------------------------------ Profile photo
@@ -205,10 +238,30 @@ async function clinicBySlug(slug) {
   return clinic;
 }
 
-/** Same response whether or not the number is known — no patient enumeration. */
+/** A number on a clinic staff login belongs to staff, never to the patient portal. */
+async function isStaffNumber(clinicId, phone) {
+  const staff = await User.findOne({ clinicId, phone: { $in: phoneVariants(phone) }, role: { $ne: ROLES.PATIENT } })
+    .select('_id').lean();
+  return Boolean(staff);
+}
+const staffNumberError = () => new ApiError(403,
+  'This number is registered for clinic staff. Sign in with your staff login instead.', 'STAFF_NUMBER');
+
+/**
+ * A code is sent only to a number already registered as a patient at this clinic.
+ * Any other number gets NOT_REGISTERED and no SMS/WhatsApp message.
+ */
 export const patientRequestOtp = catchAsync(async (req, res) => {
   const clinic = await clinicBySlug(req.body.clinicSlug);
-  await issueOtp({ clinicId: clinic._id, clinicName: clinic.name, phone: normalisePhone(req.body.phone), purpose: 'PATIENT_LOGIN' });
+  const phone = normalisePhone(req.body.phone);
+  if (await isStaffNumber(clinic._id, phone)) throw staffNumberError();
+  const registered = await Patient.findOne({ phone: { $in: phoneVariants(phone) }, guardianPatientId: { $exists: false } })
+    .setOptions({ clinicId: clinic._id })
+    .select('_id');
+  if (!registered) {
+    throw new ApiError(404, 'This mobile number is not registered with this clinic. Please register at the clinic first.', 'NOT_REGISTERED');
+  }
+  await issueOtp({ clinicId: clinic._id, clinicName: clinic.name, phone, purpose: 'PATIENT_LOGIN' });
   ok(res, { message: 'We sent a 6-digit code to that number.' });
 });
 
@@ -234,9 +287,12 @@ async function patientUserFor(clinic, patient) {
 export const patientVerifyOtp = catchAsync(async (req, res) => {
   const clinic = await clinicBySlug(req.body.clinicSlug);
   const phone = normalisePhone(req.body.phone);
+  // Checked before the code is consumed, so a staff number can't sign in even with a valid code.
+  if (await isStaffNumber(clinic._id, phone)) throw staffNumberError();
   await verifyOtp({ clinicId: clinic._id, phone, purpose: 'PATIENT_LOGIN', code: req.body.code });
 
-  const patient = await Patient.findOne({ phone, guardianPatientId: { $exists: false } }).setOptions({ clinicId: clinic._id });
+  // Registered already (however the number was saved): sign straight in, no registration step.
+  const patient = await Patient.findOne({ phone: { $in: phoneVariants(phone) }, guardianPatientId: { $exists: false } }).setOptions({ clinicId: clinic._id });
   if (!patient) {
     // Phone proven; we still need a name and consent before creating a record.
     const registrationToken = jwt.sign({ phone, clinicId: String(clinic._id), purpose: 'patient-register' },
@@ -247,7 +303,7 @@ export const patientVerifyOtp = catchAsync(async (req, res) => {
   const user = await patientUserFor(clinic, patient);
   req.user = user; req.tenant = { clinicId: clinic._id };
   recordAudit(req, { action: 'PATIENT_LOGIN', entityType: 'User', entityId: user._id });
-  ok(res, { user: user.toSafeJSON(), ...(await issueSession(user)) });
+  ok(res, { user: user.toSafeJSON(), ...(await issueSession(res, user)) });
 });
 
 export const patientRegister = catchAsync(async (req, res) => {
@@ -260,7 +316,7 @@ export const patientRegister = catchAsync(async (req, res) => {
   if (!clinic?.isActive) throw ApiError.notFound('Clinic not found');
   const clinicId = clinic._id;
 
-  let patient = await Patient.findOne({ phone: claims.phone, guardianPatientId: { $exists: false } }).setOptions({ clinicId });
+  let patient = await Patient.findOne({ phone: { $in: phoneVariants(claims.phone) }, guardianPatientId: { $exists: false } }).setOptions({ clinicId });
   if (!patient) {
     patient = await Patient.create({
       clinicId, name: req.body.name, phone: claims.phone, email: req.body.email || undefined,
@@ -270,7 +326,7 @@ export const patientRegister = catchAsync(async (req, res) => {
   const user = await patientUserFor(clinic, patient);
   req.user = user; req.tenant = { clinicId };
   recordAudit(req, { action: 'PATIENT_REGISTERED', entityType: 'Patient', entityId: patient._id });
-  created(res, { user: user.toSafeJSON(), ...(await issueSession(user)) });
+  created(res, { user: user.toSafeJSON(), ...(await issueSession(res, user)) });
 });
 
 // -------------------------------------------------------------------- Me

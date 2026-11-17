@@ -20,21 +20,37 @@ const avatarUpload = multer({
     : cb(ApiError.badRequest('Upload a JPG, PNG or WebP image', 'UNSUPPORTED_IMAGE'))),
 });
 
-// Brute-force guards on the credential endpoints only.
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 * env.rateLimitMultiplier, standardHeaders: true });
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 * env.rateLimitMultiplier, standardHeaders: true });
+// Every login-style endpoint allows 5 requests per 15 minutes. The count is kept
+// per IP *and* per identifier (email, phone or clinic), so one clinic's shared
+// WiFi can't lock out its whole staff, while guessing against one account is capped.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX = 5;
+const loginLimiter = rateLimit({
+  windowMs: LOGIN_WINDOW_MS,
+  max: LOGIN_MAX * env.rateLimitMultiplier,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Admin's own IPs (SUPER_ADMIN_IPS) are never limited; everyone else is.
+  skip: (req) => env.superAdminIps.includes(req.ip),
+  keyGenerator: (req) => {
+    const who = req.body?.identifier || req.body?.email || req.body?.phone || req.body?.clinicSlug
+      || String(req.body?.registrationToken || '').slice(-24);
+    return `${req.ip}|${String(who).trim().toLowerCase()}`;
+  },
+  message: { success: false, message: 'Too many attempts. Wait a few minutes and try again.', code: 'RATE_LIMITED' },
+});
 
 // No public sign-up: clinics and their logins are provisioned by the super admin.
-router.post('/login', authLimiter, validate(ctrl.loginSchema), ctrl.login);
+router.post('/login', loginLimiter, validate(ctrl.loginSchema), ctrl.login);
 router.post('/refresh', ctrl.refresh);
-router.post('/logout', authenticate, ctrl.logout);
-router.post('/forgot-password', authLimiter, validate(ctrl.forgotSchema), ctrl.forgotPassword);
-router.post('/reset-password', authLimiter, validate(ctrl.resetSchema), ctrl.resetPassword);
+router.post('/logout', ctrl.logout);
+router.post('/forgot-password', loginLimiter, validate(ctrl.forgotSchema), ctrl.forgotPassword);
+router.post('/reset-password', loginLimiter, validate(ctrl.resetSchema), ctrl.resetPassword);
 router.post('/change-password', authenticate, validate(ctrl.changePasswordSchema), ctrl.changePassword);
 
-router.post('/patient/request-otp', otpLimiter, validate(ctrl.otpRequestSchema), ctrl.patientRequestOtp);
-router.post('/patient/verify-otp', otpLimiter, validate(ctrl.otpVerifySchema), ctrl.patientVerifyOtp);
-router.post('/patient/register', otpLimiter, validate(ctrl.patientRegisterSchema), ctrl.patientRegister);
+router.post('/patient/request-otp', loginLimiter, validate(ctrl.otpRequestSchema), ctrl.patientRequestOtp);
+router.post('/patient/verify-otp', loginLimiter, validate(ctrl.otpVerifySchema), ctrl.patientVerifyOtp);
+router.post('/patient/register', loginLimiter, validate(ctrl.patientRegisterSchema), ctrl.patientRegister);
 
 router.get('/me', authenticate, ctrl.me);
 router.put('/me/avatar', authenticate, avatarUpload.single('photo'), ctrl.uploadAvatar);

@@ -9,7 +9,7 @@ import { ok, created } from '../../utils/respond.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { getAvailability } from '../../services/availability.service.js';
 import { bookAppointment } from '../../services/appointment.service.js';
-import { issueOtp, verifyOtp, normalisePhone } from '../../services/otp.service.js';
+import { issueOtp, verifyOtp, normalisePhone, phoneVariants } from '../../services/otp.service.js';
 import { gatewayEnabled } from '../../integrations/razorpay.js';
 import { startPrepayment, verifyCheckout } from '../billing/billing.routes.js';
 import { env } from '../../config/env.js';
@@ -124,8 +124,9 @@ router.post('/qr/:slug/:branchId/register', bookingLimiter, loadClinic, validate
     throw ApiError.badRequest('Please enter a valid mobile number', 'INVALID_PHONE');
   }
 
+  // Match every saved format of the number, so reception-entered records are found too.
   const existingPatient = await Patient.findOne({
-    phone,
+    phone: { $in: phoneVariants(phone) },
     guardianPatientId: { $exists: false },
   })
     .setOptions({ clinicId: clinic._id })
@@ -133,7 +134,7 @@ router.post('/qr/:slug/:branchId/register', bookingLimiter, loadClinic, validate
 
   if (existingPatient) {
     throw ApiError.conflict(
-      'This mobile number is already registered with this clinic. Please contact the clinic reception.',
+      'This mobile number is already registered with this clinic. Sign in with it instead.',
       'PATIENT_EXISTS',
     );
   }

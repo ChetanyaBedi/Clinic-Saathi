@@ -6,7 +6,7 @@ import { Menu, Bell, LogOut, Search, LayoutDashboard, KeyRound, ChevronDown, Sun
 import { useAuth } from '../../hooks/useAuth.jsx';
 import { useTheme } from '../../hooks/useTheme.jsx';
 import { HOME_FOR_ROLE, ROLE_LABEL } from '../../routes/nav.js';
-import { api, unwrap, setTokens } from '../../lib/api.js';
+import { api, unwrap } from '../../lib/api.js';
 import { getSocket } from '../../lib/socket.js';
 import { relative } from '../../lib/format.js';
 import { Modal } from '../ui/Modal.jsx';
@@ -66,7 +66,8 @@ function ChangePassword({ open, onClose }) {
   const [errors, setErrors] = useState({});
   const save = useMutation({
     mutationFn: () => api.post('/auth/change-password', form).then(unwrap),
-    onSuccess: (d) => { setTokens({ access: d.accessToken, refresh: d.refreshToken }); toast.success('Password changed'); setForm({ currentPassword: '', newPassword: '' }); onClose(); },
+    // The server re-issues the session cookies, so this device stays signed in.
+    onSuccess: () => { toast.success('Password changed'); setForm({ currentPassword: '', newPassword: '' }); onClose(); },
     onError: (e) => { setErrors(fieldErrors(e)); toast.error(e.message); },
   });
   return (

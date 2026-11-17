@@ -29,6 +29,7 @@ export default function PatientQRRegister() {
   const [clinicInfo, setClinicInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [registeredPatient, setRegisteredPatient] = useState(null);
+  const [alreadyRegistered, setAlreadyRegistered] = useState(false);
 
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -87,6 +88,11 @@ export default function PatientQRRegister() {
       toast.success('Patient registered successfully');
     },
     onError: (error) => {
+      // Already on file: no need to register again, send them to sign in instead.
+      if (error.code === 'PATIENT_EXISTS') {
+        setAlreadyRegistered(true);
+        return;
+      }
       setErrors(fieldErrors(error));
       toast.error(error.message || 'Patient registration failed');
     },
@@ -104,6 +110,26 @@ export default function PatientQRRegister() {
           <h1 className="text-2xl font-bold text-ink">Invalid Registration QR</h1>
           <p className="text-ink-muted">This QR code is invalid, incomplete, or the clinic branch is inactive. Please ask the clinic reception for a new QR code.</p>
           <button type="button" onClick={() => navigate('/patient/login')} className="btn btn-primary">Go to Patient Login</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (alreadyRegistered) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-paper p-5">
+        <div className="w-full max-w-md space-y-4 rounded-2xl bg-surface p-8 text-center shadow-lg">
+          <CheckCircle2 className="mx-auto h-16 w-16 text-pulse" />
+          <h1 className="text-2xl font-bold text-ink">You're already registered</h1>
+          <p className="text-ink-muted">
+            This mobile number already has a record at {clinicInfo.clinic.name}. No need to register again. Sign in with a one-time code sent to your phone.
+          </p>
+          <button type="button" onClick={() => navigate(`/patient/login?clinic=${encodeURIComponent(clinicSlug)}`)} className="btn btn-primary w-full">
+            Sign in to my account
+          </button>
+          <button type="button" onClick={() => setAlreadyRegistered(false)} className="btn-quiet w-full text-sm">
+            Use a different number
+          </button>
         </div>
       </div>
     );
@@ -197,6 +223,20 @@ export default function PatientQRRegister() {
                 {registration.isPending ? 'Registering…' : 'Complete Registration'}
               </button>
             </form>
+
+            <div className="border-t border-line pt-4 text-center">
+              <p className="mb-2 text-sm text-ink-muted">Already registered at this clinic?</p>
+              <button
+                type="button"
+                className="btn-quiet w-full"
+                onClick={() => {
+                  const last10 = form.phone.replace(/\D/g, '').slice(-10);
+                  navigate(`/patient/login?clinic=${encodeURIComponent(clinicSlug)}${last10.length === 10 ? `&phone=${last10}` : ''}`);
+                }}
+              >
+                Log in with your mobile number
+              </button>
+            </div>
           </div>
         </Section>
       </div>

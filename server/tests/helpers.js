@@ -21,8 +21,10 @@ export async function setup(name) {
   process.env.JWT_ACCESS_SECRET = 'test-access-secret';
   process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
   process.env.STORAGE_DIR = `storage/test-${name}`;
-  for (const k of ['WHATSAPP_TOKEN', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'OPENAI_API_KEY', 'RESEND_API_KEY', 'WHATSAPP_APP_SECRET']) {
-    delete process.env[k];
+  // Blank, not deleted: dotenv would reload the real value from .env and tests would
+  // send live WhatsApp/NexSahay messages. An empty value keeps every integration on its stub.
+  for (const k of ['WHATSAPP_TOKEN', 'NEXSAHAY_API_KEY', 'NEXSAHAY_API_BASE', 'NEXSAHAY_SESSION_ID', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'OPENAI_API_KEY', 'RESEND_API_KEY', 'WHATSAPP_APP_SECRET']) {
+    process.env[k] = '';
   }
 
   const db = (await import('../src/db/index.js')).default;
@@ -116,9 +118,21 @@ export async function makeSuperAdmin(ctx) {
   return r.data.accessToken;
 }
 
-/** Signs a patient into the portal through the real OTP flow (code read from the stub outbox). */
+/**
+ * Signs a patient into the portal through the real OTP flow (code read from the stub outbox).
+ * Login codes only go to registered patients, so the patient record is created first
+ * (as reception or the QR form would do).
+ */
 export async function patientLogin(ctx, slug, phone, name = 'Portal Patient') {
   const { lastStubTo } = await import('../src/integrations/stubOutbox.js');
+  const clinic = await ctx.models.Clinic.findOne({ slug }).lean();
+  const onFile = await ctx.models.Patient.findOne({ phone }).setOptions({ clinicId: clinic._id });
+  if (!onFile) {
+    await ctx.models.Patient.create({
+      clinicId: clinic._id, name, phone,
+      consent: { dataProcessing: { granted: true, grantedAt: new Date(), version: 'v1' } },
+    });
+  }
   const req = await ctx.api('POST', '/auth/patient/request-otp', { body: { clinicSlug: slug, phone } });
   if (req.status !== 200) throw new Error(`otp request failed ${JSON.stringify(req.body)}`);
   const code = lastStubTo(phone).body.match(/\d{6}/)[0];

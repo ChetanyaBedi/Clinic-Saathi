@@ -1,58 +1,44 @@
 import axios from 'axios';
 
+// Sessions live in httpOnly cookies that the server sets. The browser attaches
+// them on every request, and page scripts never see the tokens, so nothing
+// session-related is kept in localStorage.
 export const api = axios.create({ baseURL: '/api', withCredentials: true });
 
-let accessToken = localStorage.getItem('cs_access') || null;
-let refreshToken = localStorage.getItem('cs_refresh') || null;
-
-export function setTokens({ access, refresh }) {
-  accessToken = access ?? accessToken;
-  refreshToken = refresh ?? refreshToken;
-  if (access) localStorage.setItem('cs_access', access);
-  if (refresh) localStorage.setItem('cs_refresh', refresh);
-}
-
-export function clearTokens() {
-  accessToken = null;
-  refreshToken = null;
+// Older builds stored tokens in localStorage. Remove them so they can't linger.
+try {
   localStorage.removeItem('cs_access');
   localStorage.removeItem('cs_refresh');
+} catch { /* storage unavailable */ }
+
+// Requests that must never trigger a refresh: the auth calls themselves, and
+// sign-in or reset flows where a 401 means "wrong password", not "expired session".
+const NO_REFRESH = ['/auth/login', '/auth/refresh', '/auth/logout', '/auth/patient/', '/auth/forgot-password', '/auth/reset-password'];
+
+// Many requests can fail at once when the access cookie expires. They all share one refresh.
+let refreshing = null;
+function refreshSession() {
+  refreshing = refreshing || axios.post('/api/auth/refresh', null, { withCredentials: true })
+    .finally(() => { refreshing = null; });
+  return refreshing;
 }
 
-export const getAccessToken = () => accessToken;
-
-api.interceptors.request.use((config) => {
-  if (accessToken) config.headers.Authorization = `Bearer ${accessToken}`;
-  return config;
-});
-
-// Refresh once on a 401, then replay the original request. The server rotates
-// the refresh token on every use, so the new one replaces the old.
-let refreshing = null;
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config || {};
-    const isAuthError = error.response?.status === 401 && !original._retried && !original.url?.startsWith('/auth/');
+    const skip = NO_REFRESH.some((p) => original.url?.startsWith(p));
 
-    if (isAuthError && refreshToken) {
+    // The access cookie is short-lived. A 401 means refresh it once, then replay the request.
+    if (error.response?.status === 401 && !original._retried && !skip) {
       original._retried = true;
-      refreshing = refreshing || axios.post('/api/auth/refresh', { refreshToken })
-        .then((r) => {
-          setTokens({ access: r.data.data.accessToken, refresh: r.data.data.refreshToken });
-          return r.data.data.accessToken;
-        })
-        .catch((e) => {
-          const patient = window.location.pathname.startsWith('/patient');
-          clearTokens();
-          window.location.href = patient ? '/patient/login' : '/login';
-          throw e;
-        })
-        .finally(() => { refreshing = null; });
-
-      const token = await refreshing;
-      original.headers.Authorization = `Bearer ${token}`;
-      return api(original);
+      try {
+        await refreshSession();
+        return api(original);
+      } catch {
+        // The refresh cookie is gone or expired, so the session is over. The app's route guards handle the redirect.
+        window.dispatchEvent(new Event('cs:session-expired'));
+      }
     }
 
     // Normalise the server's error shape so callers always get .message and .code
@@ -84,7 +70,7 @@ export async function openFile(kind, id) {
   }
 }
 
-/** Authenticated CSV download (the export endpoints need the bearer token). */
+/** Authenticated CSV download (the export endpoints need the session cookie). */
 export async function downloadCsv(path, filename) {
   const res = await api.get(path, { responseType: 'blob' });
   const href = URL.createObjectURL(res.data);

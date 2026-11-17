@@ -134,6 +134,10 @@ export const env = {
     name: process.env.SUPER_ADMIN_NAME || 'Super Admin',
   },
 
+  // Comma-separated IPs whose sign-in attempts skip the rate limit (e.g. the admin's office).
+  superAdminIps: (process.env.SUPER_ADMIN_IPS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean),
+
   // Relaxed limits for automated tests only.
   rateLimitMultiplier:
     process.env.NODE_ENV === 'test' ? 1000 : 1,

@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { User, Clinic } from '../models/index.js';
 import { catchAsync } from '../utils/catchAsync.js';
 import { ROLES } from '../config/constants.js';
+import { ACCESS_COOKIE } from '../utils/cookies.js';
 
 // A suspended clinic must lose access within seconds, not when tokens expire,
 // but checking the database on every request is wasteful. A short cache splits the difference.
@@ -27,8 +28,9 @@ export const invalidateClinicStatus = (clinicId) => clinicStatusCache.delete(Str
  * anything the client sends.
  */
 export const authenticate = catchAsync(async (req, _res, next) => {
+  // The browser sends the httpOnly session cookie; API clients may still use a Bearer header.
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const token = header.startsWith('Bearer ') ? header.slice(7) : req.cookies?.[ACCESS_COOKIE];
   if (!token) throw ApiError.unauthorized();
 
   let payload;

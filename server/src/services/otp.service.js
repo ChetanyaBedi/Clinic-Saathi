@@ -13,6 +13,17 @@ const MAX_PER_HOUR = 5;
 
 export const normalisePhone = (p) => String(p || '').replace(/[^\d+]/g, '');
 
+/**
+ * Every form a number may be stored in: staff enter "9876543210" while the
+ * patient app sends "+919876543210". Lookups match all of them, so an existing
+ * patient is recognised instead of being asked to register again.
+ */
+export function phoneVariants(p) {
+  const raw = normalisePhone(p);
+  const local = raw.replace(/\D/g, '').slice(-10);
+  return [...new Set([raw, local, `91${local}`, `+91${local}`])].filter(Boolean);
+}
+
 /** Issues a 6-digit code and delivers it. Returns nothing about the code itself. */
 export async function issueOtp({ clinicId, clinicName, phone, purpose }) {
   const cleanPhone = normalisePhone(phone);

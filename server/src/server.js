@@ -6,6 +6,7 @@ import { connectDb } from './config/db.js';
 import { createApp } from './app.js';
 import { registerListeners } from './services/listeners.js';
 import { verifyAccess } from './utils/tokens.js';
+import { ACCESS_COOKIE, readCookie } from './utils/cookies.js';
 import { User } from './models/index.js';
 import db from './db/index.js';
 import { ensureSuperAdmin } from './seed/ensureSuperAdmin.js';
@@ -24,7 +25,8 @@ const io = new SocketServer(server, {
  */
 io.use(async (socket, next) => {
   try {
-    const payload = verifyAccess(socket.handshake.auth?.token);
+    const token = socket.handshake.auth?.token || readCookie(socket.handshake.headers.cookie, ACCESS_COOKIE);
+    const payload = verifyAccess(token);
     const user = await User.findById(payload.sub).select('role clinicId doctorId isActive').lean();
     if (!user?.isActive) return next(new Error('unauthorized'));
     socket.data.user = user;

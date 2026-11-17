@@ -1,12 +1,23 @@
 import { io } from 'socket.io-client';
-import { getAccessToken } from './api.js';
+import { api } from './api.js';
 
 let socket = null;
+let retryingAuth = false;
 
 export function connectSocket() {
   if (socket) return socket;
-  // auth as a function: every reconnect sends the current (possibly refreshed) token.
-  socket = io('/', { auth: (cb) => cb({ token: getAccessToken() }), transports: ['websocket'] });
+  // The session cookie rides along on the websocket handshake, so no token is sent by hand.
+  socket = io('/', { transports: ['websocket'] });
+  socket.on('connect', () => { retryingAuth = false; });
+  // The access cookie expires after 15 minutes. If the handshake is rejected, refresh once and reconnect.
+  socket.on('connect_error', async (err) => {
+    if (err.message !== 'unauthorized' || retryingAuth) return;
+    retryingAuth = true;
+    try {
+      await api.post('/auth/refresh');
+      socket.connect();
+    } catch { /* session is over; the app signs the user out */ }
+  });
   return socket;
 }
 
