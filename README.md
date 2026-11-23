@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ClinicSaathi
 
 **Smarter Clinics. Happier Patients.** A multi-tenant clinic management SaaS: booking, queue,
@@ -187,3 +188,7 @@ handling; WhatsApp webhook signatures, routing and STOP.
   S3 (the signed-link flow above it stays the same).
 - Consent wording, retention periods and prescription-signature requirements should be reviewed
   against the DPDP Act 2023 and the Telemedicine Practice Guidelines by counsel.
+=======
+# Clinic-Saathi
+Clinic Saathi is an AI-powered healthcare management platform designed to streamline clinic operations. It features smart appointment scheduling, patient management, AI virtual receptionist, WhatsApp automation, doctor management, QR-based check-ins, and centralized dashboards, combining full-stack development and workflow automation.
+>>>>>>> origin/main
